@@ -32,73 +32,52 @@ class Health:
             self.log_initialization_values()
 
     def get_health_result(self):
+        health_result = "#Kafka Connectors and Tasks statuses\n"
         try:
-            health_result = {"failures": [], "failure_states": self.unhealthy_states}
             connector_names = self.get_connector_names()
             connector_statuses = self.get_connectors_health(connector_names)
-            self.handle_healthcheck(connector_statuses, health_result)
-            health_result["healthy"] = len(health_result["failures"]) == 0
+            health_result += self.handle_healthcheck(connector_statuses)
+            health_result += f"connect_exception 0\n"
         except Exception as ex:
             logging.error("Error while attempting to calculate health result. Assuming unhealthy. Error: {}".format(ex))
             logging.error(ex)
-            health_result = {
-                "healthy": False,
-                "message": "Exception raised while attempting to calculate health result, assuming unhealthy.",
-                "error": "{}".format(ex),
-                "failure_states": self.unhealthy_states
-            }
+            health_result += f"connect_exception 1"
         helpers.log_line_break()
         return health_result
 
-    def handle_healthcheck(self, connector_statuses, health_result):
+    def handle_healthcheck(self, connector_statuses):
         connectors_on_this_worker = False
+        health_result = ""
         for connector in connector_statuses:
             if self.is_on_this_worker(connector["worker_id"]):
                 connectors_on_this_worker = True
-                if self.is_in_unhealthy_state(connector["state"]):
-                    logging.warning("Connector '{}' is unhealthy in failure state: {}".format(connector["name"], connector["state"]))
-                    health_result["failures"].append({
-                        "type": "connector",
-                        "connector": connector["name"],
-                        "state": connector["state"],
-                        "worker_id": connector["worker_id"]
-                    })
-                else:
-                    logging.info("Connector '{}' is healthy in state: {}".format(connector["name"], connector["state"]))
-            self.handle_task_healthcheck(connector, health_result)
+                logging.info("Connector '{}' is in state: {}".format(connector["name"], connector["state"]))
+                metric_value = 0 if connector["state"].upper().strip() in self.unhealthy_states else 1
+                health_result += f"connector_state{{connector_name=\"{connector['name']}\"}} {metric_value}\n"
+            health_result += self.handle_task_healthcheck(connector)
         if not connectors_on_this_worker and connector_statuses:
-            self.handle_broker_healthcheck(health_result, connector_statuses[0]["name"])
+            health_result += self.handle_broker_healthcheck(connector_statuses[0]["name"])
+        return health_result
 
-    def handle_broker_healthcheck(self, health_result, connector_name):
+    def handle_broker_healthcheck(self, connector_name):
         try:
             self.get_connector_details(connector_name)
+            return f"broker_state{{connector_name=\"{connector_name}\"}} 1\n"
         except Exception as ex:
             logging.error("Error while attempting to get details for {}. Assuming unhealthy. Error: {}".format(connector_name, ex))
             logging.error(ex)
-            health_result["failures"].append({
-                "type": "broker",
-                "connector": connector_name,
-            })
+            return f"broker_state{{connector_name=\"{connector_name}\"}} 0\n"
 
-    def handle_task_healthcheck(self, connector, health_result):
+    def handle_task_healthcheck(self, connector):
+        health_result = ""
         for task in connector["tasks"]:
             if self.is_on_this_worker(task["worker_id"]):
-                if self.is_in_unhealthy_state(task["state"]):
-                    logging.warning("Connector '{}' task '{}' is unhealthy in failure state: {}".format(
-                        connector["name"], task["id"], task["state"]
-                    ))
-                    health_result["failures"].append({
-                        "type": "task",
-                        "connector": connector["name"],
-                        "id": task["id"],
-                        "state": task["state"],
-                        "worker_id": task["worker_id"],
-                        "trace": task.get("trace", None)
-                    })
-                else:
-                    logging.info("Connector '{}' task '{}' is healthy in state: {}".format(
-                        connector["name"], task["id"], task["state"]
-                    ))
+                logging.info("Connector '{}' task '{}' is in state: {}".format(
+                    connector["name"], task["id"], task["state"]
+                ))
+                metric_value = 0 if task["state"].upper().strip() in self.unhealthy_states else 1
+                health_result += f"task_state{{connector_name=\"{connector['name']}\"}} {metric_value}\n"
+        return health_result
 
     def get_connectors_health(self, connector_names):
         statuses = []

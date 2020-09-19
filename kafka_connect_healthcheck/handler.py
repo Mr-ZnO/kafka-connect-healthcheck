@@ -30,16 +30,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path in ["/"]:
-            payload = self.health.get_health_result()
-            payload_json = json.dumps(payload)
-            status = 200 if payload["healthy"] else 503
-            self.respond(status, payload_json)
-        elif self.path in ["/ping"]:
-            payload_json = json.dumps({"status": "UP"})
-            self.respond(200, payload_json)
-        else:
-            self.respond(404, "")
+        payload = self.health.get_health_result()
+        status = 200
+        self.respond(status, payload)
 
     def log_message(self, format, *args):
         return
